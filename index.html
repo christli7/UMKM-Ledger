@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Micro-UMKM Financial & Inventory Tracker</title>
+    
+    <link rel="stylesheet" href="styles.css">
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.mini.min.js"></script>
+    <script src="app.js" defer></script>
+</head>
+<body>
+
+    <header>
+        <div>
+            <h1>TokoKita Financial & Stock Dashboard</h1>
+            <p style="color: var(--text-muted);">Micro-UMKM Business Operations Control Hub</p>
+        </div>
+        <div style="text-align: right;">
+            <span class="badge badge-success">Live Session</span>
+            <p style="font-size: 12px; color: var(--text-muted); margin-top:4px;">Data Context: Local Offline</p>
+        </div>
+    </header>
+
+    <div class="dashboard-grid">
+        
+        <div class="card col-4 metric-card">
+            <span class="metric-title">Daily Cash Revenue</span>
+            <span class="metric-value" id="daily-revenue-metric">Rp 0</span>
+            <span style="color: var(--success); font-size: 12px;" id="daily-sales-count">✓ 0 Checked-out sales today</span>
+        </div>
+
+        <div class="card col-4 metric-card">
+            <span class="metric-title">Active Capital Valuation (Stock)</span>
+            <span class="metric-value" id="capital-valuation-metric">Rp 0</span>
+            <span style="color: var(--text-muted); font-size: 12px;">Tied assets across all active items</span>
+        </div>
+
+        <div class="card col-4 metric-card">
+            <span class="metric-title">Monthly Break-Even (BEP) Track</span>
+            <span class="metric-value" id="bep-text">0% Realized</span>
+            <div class="bep-container">
+                <div class="progress-bar-bg"><div class="progress-bar-fill" id="bep-bar"></div></div>
+                <span style="font-size: 12px; color: var(--text-muted);"><span id="bep-current-text">Rp 0</span> / Rp 5.000.000 monthly target</span>
+            </div>
+        </div>
+
+        <div class="card col-4">
+            <h2>Fast Ledger Entry</h2>
+            <form id="ledger-form" onsubmit="addLedgerEntry(event)">
+                <div class="form-group">
+                    <label>Transaction Category</label>
+                    <select id="entry-type" required>
+                        <option value="income">Product Sale (Income / Remove Stock)</option>
+                        <option value="expense">Product Restock (Expense / Add Stock)</option>
+                    </select>
+                </div>
+                
+                <div style="display: flex; gap: 12px;">
+                    <div class="form-group" style="flex: 2;">
+                        <label>Target Item</label>
+                        <select id="entry-item" required>
+                            <option value="Nasi">Nasi</option>
+                            <option value="Tahu">Tahu</option>
+                            <option value="Tempe">Tempe</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <label>Quantity</label>
+                        <input type="number" id="entry-qty" placeholder="e.g. 10" min="1" required />
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Total Transaction Amount (IDR)</label>
+                    <input type="number" id="entry-amount" placeholder="e.g. 75000" min="1" required />
+                </div>
+                
+                <div class="form-group">
+                    <label>Settlement Channel</label>
+                    <select id="entry-channel" required>
+                        <option value="QRIS / Digital Pay">QRIS / Digital Pay</option>
+                        <option value="Cash Account">Cash Account</option>
+                        <option value="Customer Debt Ledger">Customer Debt Ledger</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Notes</label>
+                    <textarea id="entry-notes" rows="2" placeholder="Optional notes..."></textarea>
+                </div>
+                <button type="submit">Record Transaction & Update Stock</button>
+            </form>
+        </div>
+
+        <div class="card col-8">
+            <h2>Ledger History <span style="font-size: 12px; font-weight: normal; color: var(--text-muted);">Live updates stream</span></h2>
+            <div class="stream-list" id="ledger-feed">
+                </div>
+        </div>
+
+        <div class="card col-12">
+            <h2>Integrated Inventory Matrix & Margins <span style="font-size: 12px; font-weight: normal; color: var(--text-muted);">Tied directly to active operational capital valuations</span></h2>
+            <table id="inventory-table">
+                <thead>
+                    <tr>
+                        <th>Product Specification</th>
+                        <th>Stock Level</th>
+                        <th>Unit Capital cost (COGS)</th>
+                        <th>Retail Base Price</th>
+                        <th>Net Margin (%)</th>
+                        <th>Asset Value Pool</th>
+                        <th>System Warning Flags</th>
+                    </tr>
+                </thead>
+                <tbody id="inventory-table-body">
+                    </tbody>
+            </table>
+        </div>
+
+        <div class="card col-12">
+            <h2>Report Center & Fiscal Exports</h2>
+            <div style="display: flex; gap: 16px; align-items: center; background: var(--bg-primary); padding: 12px; border-radius: 6px;">
+                <div style="flex: 1;">
+                    <label style="margin-bottom: 4px;">Target Accounting Window</label>
+                    <select style="background: white;" id="report-window">
+                        <option value="May_2026">Current Active Month</option>
+                    </select>
+                </div>
+                <div style="flex: 2; display: flex; gap: 8px; align-self: flex-end;">
+                    <button type="button" class="btn-secondary" style="height: 38px;" onclick="exportFinancialReport(true)">Download Template</button>
+                    <button type="button" style="height: 38px;" onclick="exportFinancialReport(false)">Generate Summary & Inventory File</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>
