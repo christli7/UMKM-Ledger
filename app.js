@@ -24,6 +24,11 @@ const BEP_TARGET = 5000000;
 // 2. On Load
 window.addEventListener('DOMContentLoaded', () => {
     renderApp();
+
+    // TAMBAHAN: Event listener untuk memicu kalkulasi otomatis
+    document.getElementById('entry-type').addEventListener('change', calculateTotalAmount);
+    document.getElementById('entry-item').addEventListener('change', calculateTotalAmount);
+    document.getElementById('entry-qty').addEventListener('input', calculateTotalAmount);
 });
 
 // Helper: Format Currency
