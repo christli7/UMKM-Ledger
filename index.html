@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>TokoKita - UMKM Financial and Inventory Tracker</title>
     
+    <!-- Google Fonts & Icons -->
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
     
@@ -16,6 +17,7 @@
 <body>
 
     <div class="app-container">
+        <!-- Sidebar / Bottom Nav on Mobile -->
         <aside class="sidebar">
             <div class="sidebar-brand">
                 <div class="brand-icon"><i class='bx bx-store'></i></div>
@@ -34,6 +36,228 @@
             </nav>
         </aside>
 
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-header">
+                <div>
+                    <h1 id="page-title">Dashboard</h1>
+                    <p class="text-muted">Business overview at a glance.</p>
+                </div>
+                <div class="header-status">
+                    <span class="badge badge-success-gradient"><i class='bx bx-wifi'></i> Offline</span>
+                </div>
+            </header>
+
+            <!-- VIEW 1: DASHBOARD -->
+            <div id="view-dashboard" class="view-section active">
+                <div class="dashboard-grid">
+                    <!-- Metric Cards -->
+                    <div class="card metric-card gradient-primary">
+                        <div class="metric-icon"><i class='bx bx-wallet'></i></div>
+                        <div class="metric-info">
+                            <span class="metric-title">Today's Revenue</span>
+                            <span class="metric-value" id="daily-revenue-metric">Rp 0</span>
+                            <span class="metric-subtitle" id="daily-sales-count">0 Sales Today</span>
+                        </div>
+                    </div>
+
+                    <div class="card metric-card gradient-secondary">
+                        <div class="metric-icon"><i class='bx bx-line-chart'></i></div>
+                        <div class="metric-info">
+                            <span class="metric-title">Capital Valuation</span>
+                            <span class="metric-value" id="capital-valuation-metric">Rp 0</span>
+                            <span class="metric-subtitle">Active stock assets</span>
+                        </div>
+                    </div>
+
+                    <div class="card metric-card">
+                        <div class="flex-between" style="margin-bottom: 8px;">
+                            <span class="metric-title" style="color: var(--text-muted);">Monthly BEP</span>
+                            <span class="badge badge-primary" id="bep-text">0%</span>
+                        </div>
+                        <div class="bep-container">
+                            <div class="progress-bar-bg"><div class="progress-bar-fill" id="bep-bar"></div></div>
+                            <span class="text-sm text-muted"><span id="bep-current-text" style="font-weight:600; color:var(--text-dark);">Rp 0</span> / Rp 5.000.000</span>
+                        </div>
+                    </div>
+
+                    <!-- Fast Entry Form -->
+                    <div class="card col-span-1">
+                        <div class="card-header">
+                            <h2><i class='bx bx-plus-circle text-primary'></i> Quick Entry</h2>
+                        </div>
+                        <form id="ledger-form" onsubmit="addLedgerEntry(event)">
+                            <div class="form-group">
+                                <label>Transaction Type</label>
+                                <select id="entry-type" required>
+                                    <option value="income">Sale (Income)</option>
+                                    <option value="expense">Restock (Expense)</option>
+                                </select>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group" style="flex: 2;">
+                                    <label>Product Item</label>
+                                    <select id="entry-item" required></select>
+                                </div>
+                                <div class="form-group" style="flex: 1;">
+                                    <label>Qty</label>
+                                    <input type="number" id="entry-qty" min="1" placeholder="0" required />
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Total Amount (Rp)</label>
+                                <input type="number" id="entry-amount" min="1" placeholder="Auto-calculated" required />
+                            </div>
+                            <div class="form-group">
+                                <label>Payment Channel</label>
+                                <select id="entry-channel" required>
+                                    <option value="QRIS">QRIS / Digital Pay</option>
+                                    <option value="Cash">Cash</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-block"><i class='bx bx-save'></i> Save Transaction</button>
+                        </form>
+                    </div>
+
+                    <!-- Today's Feed -->
+                    <div class="card col-span-2">
+                        <div class="card-header flex-between">
+                            <h2><i class='bx bx-history text-primary'></i> Today's Ledger</h2>
+                        </div>
+                        <div class="stream-list" id="dashboard-feed"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW 2: TRANSACTIONS -->
+            <div id="view-transactions" class="view-section hidden">
+                <div class="card">
+                    <div class="filter-bar">
+                        <div class="form-group">
+                            <label>From Date</label>
+                            <input type="date" id="filter-start-date">
+                        </div>
+                        <div class="form-group">
+                            <label>To Date</label>
+                            <input type="date" id="filter-end-date">
+                        </div>
+                        <div class="form-group">
+                            <label>Type</label>
+                            <select id="filter-type">
+                                <option value="all">All Types</option>
+                                <option value="income">Income</option>
+                                <option value="expense">Expense</option>
+                            </select>
+                        </div>
+                        <div class="filter-actions">
+                            <button class="btn btn-secondary" onclick="renderTransactions()"><i class='bx bx-filter-alt'></i> Apply</button>
+                            <button class="btn btn-success" onclick="exportTransactionsExcel()"><i class='bx bxs-file-export'></i> Export</button>
+                        </div>
+                    </div>
+                    
+                    <div class="table-responsive">
+                        <table class="modern-table">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Type</th>
+                                    <th>Item</th>
+                                    <th>Qty</th>
+                                    <th>Total</th>
+                                    <th>Channel</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tx-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW 3: INVENTORY -->
+            <div id="view-inventory" class="view-section hidden">
+                <div class="card">
+                    <div class="filter-bar">
+                        <div class="form-group search-group">
+                            <i class='bx bx-search'></i>
+                            <input type="text" id="inv-search" placeholder="Search item..." onkeyup="renderInventory()">
+                        </div>
+                        <div class="form-group">
+                            <select id="inv-filter-status" onchange="renderInventory()">
+                                <option value="all">All Status</option>
+                                <option value="low">Low Stock Only</option>
+                            </select>
+                        </div>
+                        <div class="filter-actions">
+                            <button class="btn btn-primary" onclick="openInventoryModal()"><i class='bx bx-plus'></i> Add</button>
+                            <button class="btn btn-success" onclick="exportInventoryExcel()"><i class='bx bxs-file-export'></i> Export</button>
+                        </div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="modern-table">
+                            <thead>
+                                <tr>
+                                    <th>Item Name</th>
+                                    <th>Stock</th>
+                                    <th>COGS</th>
+                                    <th>Selling Price</th>
+                                    <th>Margin</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="inv-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Inventory Modal -->
+    <div id="modal-inventory" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="inv-modal-title">Add/Edit Item</h2>
+                <button class="icon-btn" onclick="closeModal('modal-inventory')"><i class='bx bx-x'></i></button>
+            </div>
+            <form id="form-inventory" onsubmit="saveInventoryItem(event)">
+                <input type="hidden" id="inv-original-name">
+                <div class="form-group">
+                    <label>Item Name</label>
+                    <input type="text" id="inv-name" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Stock Qty</label>
+                        <input type="number" id="inv-qty" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Min. Stock Alert</label>
+                        <input type="number" id="inv-min" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Capital Cost (COGS)</label>
+                        <input type="number" id="inv-cogs" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Selling Price</label>
+                        <input type="number" id="inv-price" required>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-inventory')">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Item</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+</body>
+</html>
         <main class="main-content">
             <header class="top-header">
                 <div>
