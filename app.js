@@ -1,541 +1,859 @@
-// --- STATE MANAGEMENT ---
-let transactions = JSON.parse(localStorage.getItem('umkm_transactions')) || [];
-const defaultInventory = {
-    'Nasi': { cogs: 3000, price: 5000, qty: 50, minStock: 10 },
-    'Tahu': { cogs: 1000, price: 2000, qty: 100, minStock: 20 },
-    'Tempe':{ cogs: 1500, price: 3000, qty: 80, minStock: 15 }
+'use strict';
+
+const STORAGE_KEYS = {
+    transactions: 'umkm_transactions',
+    inventory: 'umkm_inventory'
 };
-let inventory = JSON.parse(localStorage.getItem('umkm_inventory')) || defaultInventory;
 
 const BEP_TARGET = 5000000;
+const DEFAULT_INVENTORY = {
+    'Nasi': { cogs: 3000, price: 5000, qty: 50, minStock: 10 },
+    'Tahu': { cogs: 1000, price: 2000, qty: 100, minStock: 20 },
+    'Tempe': { cogs: 1500, price: 3000, qty: 80, minStock: 15 }
+};
 
-// --- INITIALIZATION ---
-window.addEventListener('DOMContentLoaded', () => {
-    initNavigation();
-    populateItemDropdowns();
-    renderDashboard();
-    
-    // Bug Fix 1: Attach Event Listeners for Auto Calculation
-    document.getElementById('entry-type').addEventListener('change', calculateTotalAmount);
-    document.getElementById('entry-item').addEventListener('change', calculateTotalAmount);
-    document.getElementById('entry-qty').addEventListener('input', calculateTotalAmount);
-});
+const PAYMENT_CHANNELS = [
+    'QRIS / Digital Pay',
+    'Cash Account',
+    'Customer Debt Ledger'
+];
 
-// --- HELPER FUNCTIONS ---
-const formatRupiah = (number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(number);
-const getTodayStr = () => new Date().toISOString().split('T')[0];
+let state = {
+    transactions: [],
+    inventory: {},
+    activePage: 'dashboard',
+    transactionFilters: {
+        search: '',
+        startDate: '',
+        endDate: '',
+        type: 'all',
+        item: 'all',
+        channel: 'all'
+    },
+    inventoryFilters: {
+        search: '',
+        status: 'all'
+    }
+};
 
-// BUG FIX 1: The missing function from original code
-function calculateTotalAmount() {
-    const type = document.getElementById('entry-type').value;
-    const itemName = document.getElementById('entry-item').value;
-    const qty = parseInt(document.getElementById('entry-qty').value, 10) || 0;
-    
-    if (inventory[itemName]) {
-        // Jika income (jual) gunakan price, jika expense (restock) gunakan cogs
-        const unitValue = type === 'income' ? inventory[itemName].price : inventory[itemName].cogs;
-        document.getElementById('entry-amount').value = unitValue * qty;
+function loadJSON(key, fallback) {
+    try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return fallback;
+        return JSON.parse(raw);
+    } catch (error) {
+        console.error(`Failed to parse ${key}`, error);
+        return fallback;
     }
 }
 
-function populateItemDropdowns() {
-    const select = document.getElementById('entry-item');
-    select.innerHTML = '';
-    Object.keys(inventory).forEach(item => {
-        select.innerHTML += `<option value="${item}">${item} (Stock: ${inventory[item].qty})</option>`;
-    });
-}
+function loadInventory() {
+    const stored = loadJSON(STORAGE_KEYS.inventory, null);
+    const merged = { ...DEFAULT_INVENTORY };
 
-// --- NAVIGATION LOGIC ---
-function initNavigation() {
-    const navItems = document.querySelectorAll('.nav-item');
-    const views = document.querySelectorAll('.view-section');
-    const pageTitle = document.getElementById('page-title');
-
-    navItems.forEach(item => {
-        item.addEventListener('click', (e) => {
-            e.preventDefault();
-            navItems.forEach(nav => nav.classList.remove('active'));
-            views.forEach(view => view.classList.add('hidden'));
-
-            item.classList.add('active');
-            const targetId = item.getAttribute('data-target');
-            document.getElementById(targetId).classList.remove('hidden');
-            
-            // Set Title & Render specific view
-            pageTitle.innerText = item.innerText.trim();
-            if(targetId === 'view-dashboard') renderDashboard();
-            if(targetId === 'view-transactions') renderTransactions();
-            if(targetId === 'view-inventory') renderInventory();
-        });
-    });
-}
-
-// --- CORE: DASHBOARD LOGIC (PAGE 1) ---
-function renderDashboard() {
-    populateItemDropdowns(); // Refresh dropdown
-    
-    let currentRevenue = 0;
-    let salesCount = 0;
-    let totalCapital = 0;
-    const todayStr = getTodayStr();
-    
-    // Capital Valuation
-    for (const [itemName, details] of Object.entries(inventory)) {
-        totalCapital += (details.cogs * details.qty);
-    }
-
-    // Filter Today's Transactions for Feed
-    const feedContainer = document.getElementById('dashboard-feed');
-    feedContainer.innerHTML = '';
-    
-    // Only current month for BEP logic
-    const currentMonthStr = todayStr.substring(0, 7); 
-
-    transactions.forEach(t => {
-        // Hitung BEP & Revenue (Bulanan & Harian)
-        if (t.type === 'income') {
-            if(t.date && t.date.startsWith(currentMonthStr)) {
-                currentRevenue += t.amount; // Monthly BEP calculation
-            }
+    if (stored && typeof stored === 'object') {
+        for (const [name, details] of Object.entries(stored)) {
+            merged[name] = normalizeInventoryRecord(name, details);
         }
-    });
-
-    // Today's specific metrics
-    let todayRevenue = 0;
-    let todaySales = 0;
-    
-    const todaysTransactions = transactions.filter(t => t.date === todayStr).reverse();
-    
-    if (todaysTransactions.length === 0) {
-        feedContainer.innerHTML = `<div class="text-muted" style="text-align:center; padding:20px;">No transactions recorded today.</div>`;
-    } else {
-        todaysTransactions.forEach(t => {
-            if (t.type === 'income') {
-                todayRevenue += t.amount;
-                todaySales += 1;
-            }
-            
-            const isIncome = t.type === 'income';
-            feedContainer.innerHTML += `
-                <div class="stream-item">
-                    <div class="stream-info">
-                        <h4>${isIncome ? 'Sold' : 'Restocked'} ${t.qty}x ${t.item}</h4>
-                        <p>${t.time} • ${t.channel}</p>
-                    </div>
-                    <div class="${isIncome ? 'text-success' : 'text-danger'}" style="font-weight: 600;">
-                        ${isIncome ? '+' : '-'}${formatRupiah(t.amount)}
-                    </div>
-                </div>
-            `;
-        });
     }
 
-    // Update UI
-    document.getElementById('daily-revenue-metric').innerText = formatRupiah(todayRevenue);
-    document.getElementById('daily-sales-count').innerHTML = `<i class='bx bx-check-circle'></i> ${todaySales} Sales Today`;
-    document.getElementById('capital-valuation-metric').innerText = formatRupiah(totalCapital);
-    
-    // BEP UI
-    let bepPercent = (currentRevenue / BEP_TARGET) * 100;
-    document.getElementById('bep-text').innerText = `${bepPercent.toFixed(1)}%`;
-    document.getElementById('bep-bar').style.width = `${Math.min(bepPercent, 100)}%`;
-    document.getElementById('bep-bar').style.backgroundColor = bepPercent >= 100 ? 'var(--success)' : 'var(--brand)';
-    document.getElementById('bep-current-text').innerText = formatRupiah(currentRevenue);
+    persistInventory(merged);
+    return merged;
 }
 
-// Tambah Transaksi
-function addLedgerEntry(event) {
+function loadTransactions() {
+    const stored = loadJSON(STORAGE_KEYS.transactions, []);
+    if (!Array.isArray(stored)) return [];
+
+    const normalized = stored.map((tx) => normalizeTransactionRecord(tx)).filter(Boolean);
+    persistTransactions(normalized);
+    return normalized;
+}
+
+function normalizeTransactionRecord(tx) {
+    if (!tx || typeof tx !== 'object') return null;
+
+    const date = tx.transactionDate || tx.date || todayKey();
+    const createdAt = tx.createdAt || `${date}T${tx.timestamp || '00:00'}:00`;
+
+    return {
+        id: Number(tx.id) || Date.now() + Math.floor(Math.random() * 1000),
+        type: tx.type === 'expense' ? 'expense' : 'income',
+        item: String(tx.item || '').trim() || 'Unknown item',
+        qty: Math.max(1, Number(tx.qty) || 1),
+        amount: Math.max(0, Number(tx.amount) || 0),
+        channel: PAYMENT_CHANNELS.includes(tx.channel) ? tx.channel : PAYMENT_CHANNELS[0],
+        notes: String(tx.notes || '').trim(),
+        transactionDate: isValidDateKey(date) ? date : todayKey(),
+        createdAt,
+        updatedAt: tx.updatedAt || createdAt
+    };
+}
+
+function normalizeInventoryRecord(name, details) {
+    const safe = details && typeof details === 'object' ? details : {};
+    return {
+        cogs: Math.max(0, Number(safe.cogs) || 0),
+        price: Math.max(0, Number(safe.price) || 0),
+        qty: Math.max(0, Number(safe.qty) || 0),
+        minStock: Math.max(0, Number(safe.minStock) || 0),
+        archived: Boolean(safe.archived)
+    };
+}
+
+function persistTransactions(nextTransactions) {
+    state.transactions = nextTransactions;
+    localStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(nextTransactions));
+}
+
+function persistInventory(nextInventory) {
+    state.inventory = nextInventory;
+    localStorage.setItem(STORAGE_KEYS.inventory, JSON.stringify(nextInventory));
+}
+
+function formatCurrency(value) {
+    return new Intl.NumberFormat('id-ID', {
+        style: 'currency',
+        currency: 'IDR',
+        maximumFractionDigits: 0
+    }).format(Number(value) || 0).replace('Rp', 'Rp ');
+}
+
+function todayKey(date = new Date()) {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).format(date);
+}
+
+function isValidDateKey(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(value));
+}
+
+function toJakartaDateTime(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    return new Intl.DateTimeFormat('id-ID', {
+        timeZone: 'Asia/Jakarta',
+        dateStyle: 'medium',
+        timeStyle: 'short'
+    }).format(date);
+}
+
+function toJakartaDate(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    return new Intl.DateTimeFormat('id-ID', {
+        timeZone: 'Asia/Jakarta',
+        dateStyle: 'medium'
+    }).format(date);
+}
+
+function normalizeSearch(value) {
+    return String(value || '').toLowerCase().trim();
+}
+
+function cloneInventory(source) {
+    return JSON.parse(JSON.stringify(source));
+}
+
+function getInventoryNames(includeArchivedTxItem = null) {
+    const names = new Set(Object.entries(state.inventory).filter(([, item]) => !item.archived).map(([name]) => name));
+    if (includeArchivedTxItem) names.add(includeArchivedTxItem);
+    return [...names].sort((a, b) => a.localeCompare(b, 'id'));
+}
+
+function getUnifiedTransactionItems() {
+    const names = new Set(Object.keys(state.inventory));
+    state.transactions.forEach((tx) => names.add(tx.item));
+    return [...names].sort((a, b) => a.localeCompare(b, 'id'));
+}
+
+function getFilteredTransactions() {
+    const { search, startDate, endDate, type, item, channel } = state.transactionFilters;
+    const query = normalizeSearch(search);
+
+    return [...state.transactions]
+        .filter((tx) => {
+            if (type !== 'all' && tx.type !== type) return false;
+            if (item !== 'all' && tx.item !== item) return false;
+            if (channel !== 'all' && tx.channel !== channel) return false;
+            if (startDate && tx.transactionDate < startDate) return false;
+            if (endDate && tx.transactionDate > endDate) return false;
+
+            if (!query) return true;
+            const haystack = normalizeSearch([
+                tx.item,
+                tx.notes,
+                tx.channel,
+                tx.type,
+                tx.amount,
+                tx.qty,
+                tx.transactionDate
+            ].join(' '));
+            return haystack.includes(query);
+        })
+        .sort((a, b) => {
+            if (a.transactionDate !== b.transactionDate) return b.transactionDate.localeCompare(a.transactionDate);
+            return Number(b.id) - Number(a.id);
+        });
+}
+
+function getFilteredInventory() {
+    const { search, status } = state.inventoryFilters;
+    const query = normalizeSearch(search);
+
+    return Object.entries(state.inventory)
+        .map(([name, details]) => ({ name, ...details }))
+        .filter((item) => {
+            const low = item.qty > 0 && item.qty <= item.minStock;
+            const out = item.qty <= 0;
+            if (status === 'active' && item.archived) return false;
+            if (status === 'archived' && !item.archived) return false;
+            if (status === 'low' && (item.archived || !low)) return false;
+            if (status === 'out' && (item.archived || !out)) return false;
+            if (status === 'healthy' && (item.archived || low || out)) return false;
+            if (!query) return true;
+            const haystack = normalizeSearch([item.name, item.qty, item.cogs, item.price, item.minStock, item.archived ? 'archived' : 'active'].join(' '));
+            return haystack.includes(query);
+        })
+        .sort((a, b) => a.name.localeCompare(b.name, 'id'));
+}
+
+function getTransactionEffect(tx) {
+    const deltaQty = tx.type === 'income' ? -tx.qty : tx.qty;
+    return { item: tx.item, deltaQty };
+}
+
+function applyTransactionEffect(inventorySnapshot, tx, direction = 1) {
+    const effect = getTransactionEffect(tx);
+    const item = inventorySnapshot[effect.item];
+    if (!item) return { ok: false, reason: `Item "${effect.item}" tidak ada di inventory.` };
+
+    const nextQty = item.qty + (effect.deltaQty * direction);
+    if (nextQty < 0) return { ok: false, reason: `Stok ${effect.item} tidak cukup untuk menyimpan perubahan.` };
+
+    item.qty = nextQty;
+    return { ok: true };
+}
+
+function calculateDailyMetrics() {
+    const today = todayKey();
+    const todayTransactions = state.transactions.filter((tx) => tx.transactionDate === today);
+    const dailyRevenue = todayTransactions
+        .filter((tx) => tx.type === 'income')
+        .reduce((sum, tx) => sum + tx.amount, 0);
+    const salesCount = todayTransactions.filter((tx) => tx.type === 'income').length;
+    const capitalValuation = Object.values(state.inventory)
+        .filter((item) => !item.archived)
+        .reduce((sum, item) => sum + (item.cogs * item.qty), 0);
+
+    return { todayTransactions, dailyRevenue, salesCount, capitalValuation };
+}
+
+function setTodayLabel() {
+    document.getElementById('today-label').textContent = toJakartaDate(new Date());
+    document.getElementById('entry-date').value = todayKey();
+}
+
+function populateItemSelects() {
+    const activeNames = Object.keys(state.inventory).sort((a, b) => a.localeCompare(b, 'id'));
+    const transactionItems = getUnifiedTransactionItems();
+
+    const quickSelect = document.getElementById('entry-item');
+    quickSelect.innerHTML = activeNames.length
+        ? activeNames.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')
+        : '<option value="" disabled selected>No active inventory item</option>';
+
+    const filterSelect = document.getElementById('tx-item');
+    filterSelect.innerHTML = ['<option value="all">All Items</option>']
+        .concat(transactionItems.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`))
+        .join('');
+}
+
+
+function syncFilterControls() {
+    document.getElementById('tx-search').value = state.transactionFilters.search;
+    document.getElementById('tx-start-date').value = state.transactionFilters.startDate;
+    document.getElementById('tx-end-date').value = state.transactionFilters.endDate;
+    document.getElementById('tx-type').value = state.transactionFilters.type;
+    document.getElementById('tx-item').value = state.transactionFilters.item;
+    document.getElementById('tx-channel').value = state.transactionFilters.channel;
+    document.getElementById('inventory-search').value = state.inventoryFilters.search;
+    document.getElementById('inventory-status-filter').value = state.inventoryFilters.status;
+}
+
+function renderApp() {
+    setTodayLabel();
+    populateItemSelects();
+    syncFilterControls();
+    renderDashboard();
+    renderTransactions();
+    renderInventory();
+    updatePageVisibility(state.activePage);
+}
+
+function renderDashboard() {
+    const { todayTransactions, dailyRevenue, salesCount, capitalValuation } = calculateDailyMetrics();
+    const feed = document.getElementById('ledger-feed');
+
+    document.getElementById('daily-revenue-metric').textContent = formatCurrency(dailyRevenue);
+    document.getElementById('daily-sales-count').textContent = `${salesCount} transaksi penjualan hari ini`;
+    document.getElementById('capital-valuation-metric').textContent = formatCurrency(capitalValuation);
+    document.getElementById('today-count-badge').textContent = `${todayTransactions.length} records`;
+
+    const percentage = (dailyRevenue / BEP_TARGET) * 100;
+    const barWidth = Math.min(100, Math.max(0, percentage));
+    document.getElementById('bep-text').textContent = `${percentage.toFixed(1)}%`;
+    document.getElementById('bep-bar').style.width = `${barWidth}%`;
+    document.getElementById('bep-current-text').textContent = formatCurrency(dailyRevenue);
+
+    if (!todayTransactions.length) {
+        feed.innerHTML = '<div class="empty-state">Belum ada transaksi hari ini. Tambahkan transaksi untuk mulai melacak ledger.</div>';
+        return;
+    }
+
+    const sorted = [...todayTransactions].sort((a, b) => Number(b.id) - Number(a.id));
+    feed.innerHTML = sorted.map((tx) => renderStreamItem(tx)).join('');
+}
+
+function renderStreamItem(tx) {
+    const isIncome = tx.type === 'income';
+    const sign = isIncome ? '+' : '-';
+    const amountClass = isIncome ? 'amt-pos' : 'amt-neg';
+    const badge = isIncome ? '<span class="badge badge-success">Sale</span>' : '<span class="badge badge-warning">Restock</span>';
+    const notes = tx.notes ? escapeHtml(tx.notes) : 'No notes';
+
+    return `
+        <div class="stream-item">
+            <div>
+                <div class="stream-title">${badge} ${escapeHtml(tx.item)} · ${tx.qty} pcs</div>
+                <div class="stream-meta">
+                    <span>${escapeHtml(tx.transactionDate)}</span>
+                    <span>${escapeHtml(tx.channel)}</span>
+                    <span>${notes}</span>
+                </div>
+                <div class="stream-meta" style="margin-top:6px;">
+                    <span>Created ${escapeHtml(toJakartaDateTime(tx.createdAt))}</span>
+                </div>
+            </div>
+            <div class="stream-amount ${amountClass}">${sign}${formatCurrency(tx.amount)}</div>
+        </div>
+    `;
+}
+
+function renderTransactions() {
+    const rows = getFilteredTransactions();
+    const body = document.getElementById('transactions-table-body');
+    const summary = document.getElementById('transaction-summary-strip');
+
+    const totalIncome = rows.filter((tx) => tx.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
+    const totalExpense = rows.filter((tx) => tx.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
+    const net = totalIncome - totalExpense;
+
+    summary.innerHTML = [
+        `Records: ${rows.length}`,
+        `Income: ${formatCurrency(totalIncome)}`,
+        `Expense: ${formatCurrency(totalExpense)}`,
+        `Net: ${formatCurrency(net)}`
+    ].map((text) => `<span class="summary-chip">${text}</span>`).join('');
+
+    if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="8"><div class="empty-state">Tidak ada transaksi yang cocok dengan filter saat ini.</div></td></tr>';
+        return;
+    }
+
+    body.innerHTML = rows.map((tx) => {
+        const notes = tx.notes ? escapeHtml(tx.notes) : '<span class="muted">—</span>';
+        const typeBadge = tx.type === 'income'
+            ? '<span class="badge badge-success">Sale</span>'
+            : '<span class="badge badge-warning">Restock</span>';
+
+        return `
+            <tr>
+                <td>${escapeHtml(tx.transactionDate)}<br><span class="muted">${escapeHtml(toJakartaDateTime(tx.createdAt))}</span></td>
+                <td>${typeBadge}</td>
+                <td><strong>${escapeHtml(tx.item)}</strong></td>
+                <td>${tx.qty}</td>
+                <td>${formatCurrency(tx.amount)}</td>
+                <td>${escapeHtml(tx.channel)}</td>
+                <td>${notes}</td>
+                <td>
+                    <div class="table-actions">
+                        <button class="action-link" data-edit-transaction="${tx.id}">Edit</button>
+                        <button class="action-link danger" data-delete-transaction="${tx.id}">Delete</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function renderInventory() {
+    const rows = getFilteredInventory();
+    const body = document.getElementById('inventory-table-body');
+
+    if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="8"><div class="empty-state">Tidak ada item yang cocok dengan filter inventory.</div></td></tr>';
+        return;
+    }
+
+    body.innerHTML = rows.map((item) => {
+        const margin = item.price > 0 ? ((item.price - item.cogs) / item.price) * 100 : 0;
+        const asset = item.cogs * item.qty;
+        let status = '<span class="badge badge-success">Healthy</span>';
+        if (item.archived) status = '<span class="badge badge-danger">Archived</span>';
+        else if (item.qty <= 0) status = '<span class="badge badge-danger">Out of stock</span>';
+        else if (item.qty <= item.minStock) status = `<span class="badge badge-warning">Low stock</span>`;
+
+        const actions = item.archived
+            ? `<button class="action-link" data-edit-item="${escapeHtml(item.name)}">Edit</button><button class="action-link" data-restore-item="${escapeHtml(item.name)}">Restore</button>`
+            : `<button class="action-link" data-edit-item="${escapeHtml(item.name)}">Edit</button><button class="action-link danger" data-delete-item="${escapeHtml(item.name)}">Delete</button>`;
+
+        return `
+            <tr>
+                <td><strong>${escapeHtml(item.name)}</strong></td>
+                <td>${item.qty}</td>
+                <td>${formatCurrency(item.cogs)}</td>
+                <td>${formatCurrency(item.price)}</td>
+                <td>${margin.toFixed(1)}%</td>
+                <td>${formatCurrency(asset)}</td>
+                <td>${status}</td>
+                <td>
+                    <div class="table-actions">
+                        ${actions}
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function updatePageVisibility(page) {
+    document.querySelectorAll('.page').forEach((section) => {
+        section.classList.toggle('active', section.id === `page-${page}`);
+    });
+    document.querySelectorAll('.nav-pill').forEach((button) => {
+        button.classList.toggle('active', button.dataset.page === page);
+    });
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function addTransaction(event) {
     event.preventDefault();
+
     const type = document.getElementById('entry-type').value;
     const item = document.getElementById('entry-item').value;
-    const qty = parseInt(document.getElementById('entry-qty').value, 10);
-    const amount = parseInt(document.getElementById('entry-amount').value, 10);
+    const qty = Number(document.getElementById('entry-qty').value);
+    const amount = Number(document.getElementById('entry-amount').value);
     const channel = document.getElementById('entry-channel').value;
-    
-    const now = new Date();
-    
-    // Guardrail stock
-    if (type === 'income' && inventory[item].qty < qty) {
-        alert(`Failed: Not enough stock! You only have ${inventory[item].qty} ${item}.`);
+    const notes = document.getElementById('entry-notes').value.trim();
+    const transactionDate = document.getElementById('entry-date').value;
+
+    if (!state.inventory[item] || state.inventory[item].archived) {
+        alert(`Item "${item}" belum aktif di inventory. Aktifkan kembali di Page 3 terlebih dahulu.`);
         return;
     }
 
-    // Update Inventory
-    if (type === 'income') inventory[item].qty -= qty;
-    else inventory[item].qty += qty;
-    
-    localStorage.setItem('umkm_inventory', JSON.stringify(inventory));
+    if (!Number.isFinite(qty) || qty < 1 || !Number.isFinite(amount) || amount < 1 || !transactionDate) {
+        alert('Lengkapi data transaksi dengan benar.');
+        return;
+    }
 
-    // Bug Fix 2: Menyimpan tanggal `date` agar bisa di-filter di Page 2
-    transactions.push({
+    const workingInventory = cloneInventory(state.inventory);
+    const tempTx = { type, item, qty, amount, channel, notes, transactionDate };
+    const result = applyTransactionEffect(workingInventory, tempTx, 1);
+    if (!result.ok) {
+        alert(result.reason);
+        return;
+    }
+
+    const tx = {
         id: Date.now(),
-        type: type,
-        item: item,
-        qty: qty,
-        amount: amount,
-        channel: channel,
-        date: getTodayStr(), 
-        time: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    });
-    localStorage.setItem('umkm_transactions', JSON.stringify(transactions));
+        type,
+        item,
+        qty,
+        amount,
+        channel,
+        notes,
+        transactionDate,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
 
-    document.getElementById('ledger-form').reset();
-    renderDashboard();
+    persistInventory(workingInventory);
+    persistTransactions([...state.transactions, tx]);
+
+    event.target.reset();
+    document.getElementById('entry-date').value = todayKey();
+    renderApp();
 }
 
-// --- CORE: TRANSACTIONS LOGIC (PAGE 2) ---
-function renderTransactions() {
-    const tbody = document.getElementById('tx-table-body');
-    tbody.innerHTML = '';
-    
-    const startDate = document.getElementById('filter-start-date').value;
-    const endDate = document.getElementById('filter-end-date').value;
-    const typeFilter = document.getElementById('filter-type').value;
+function openTransactionModal(txId) {
+    const tx = state.transactions.find((entry) => String(entry.id) === String(txId));
+    if (!tx) return;
 
-    let filtered = transactions.slice().reverse();
+    const itemSelect = document.getElementById('edit-transaction-item');
+    const options = getInventoryNames(tx.item)
+        .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
+        .join('');
+    itemSelect.innerHTML = options;
 
-    if (startDate) filtered = filtered.filter(t => t.date >= startDate);
-    if (endDate) filtered = filtered.filter(t => t.date <= endDate);
-    if (typeFilter !== 'all') filtered = filtered.filter(t => t.type === typeFilter);
+    document.getElementById('edit-transaction-id').value = tx.id;
+    document.getElementById('edit-transaction-type').value = tx.type;
+    itemSelect.value = tx.item;
+    document.getElementById('edit-transaction-qty').value = tx.qty;
+    document.getElementById('edit-transaction-amount').value = tx.amount;
+    document.getElementById('edit-transaction-channel').value = tx.channel;
+    document.getElementById('edit-transaction-date').value = tx.transactionDate;
+    document.getElementById('edit-transaction-notes').value = tx.notes || '';
 
-    if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;">No transactions found.</td></tr>`;
+    openModal('transaction-modal');
+}
+
+function saveEditedTransaction(event) {
+    event.preventDefault();
+
+    const txId = Number(document.getElementById('edit-transaction-id').value);
+    const index = state.transactions.findIndex((entry) => Number(entry.id) === txId);
+    if (index === -1) return;
+
+    const oldTx = state.transactions[index];
+    const nextTx = {
+        ...oldTx,
+        type: document.getElementById('edit-transaction-type').value,
+        item: document.getElementById('edit-transaction-item').value,
+        qty: Number(document.getElementById('edit-transaction-qty').value),
+        amount: Number(document.getElementById('edit-transaction-amount').value),
+        channel: document.getElementById('edit-transaction-channel').value,
+        transactionDate: document.getElementById('edit-transaction-date').value,
+        notes: document.getElementById('edit-transaction-notes').value.trim(),
+        updatedAt: new Date().toISOString()
+    };
+
+    if (!Number.isFinite(nextTx.qty) || nextTx.qty < 1 || !Number.isFinite(nextTx.amount) || nextTx.amount < 1 || !nextTx.transactionDate) {
+        alert('Data transaksi tidak valid.');
         return;
     }
 
-    filtered.forEach(t => {
-        const isIncome = t.type === 'income';
-        const badgeClass = isIncome ? 'badge-success' : 'badge-danger';
-        tbody.innerHTML += `
-            <tr>
-                <td>${t.date} <span class="text-muted text-sm">${t.time}</span></td>
-                <td><span class="badge ${badgeClass}">${t.type.toUpperCase()}</span></td>
-                <td><strong>${t.item}</strong></td>
-                <td>${t.qty}</td>
-                <td>${formatRupiah(t.amount)}</td>
-                <td>${t.channel}</td>
-                <td>
-                    <button class="btn btn-danger" onclick="deleteTransaction(${t.id})">
-                        <i class='bx bx-trash'></i> Delete
-                    </button>
-                </td>
-            </tr>
-        `;
-    });
-}
-
-function deleteTransaction(id) {
-    if(!confirm('Are you sure you want to delete this transaction? Stock will be reverted.')) return;
-    
-    const txIndex = transactions.findIndex(t => t.id === id);
-    if(txIndex > -1) {
-        const tx = transactions[txIndex];
-        // Revert Inventory
-        if(inventory[tx.item]) {
-            if(tx.type === 'income') inventory[tx.item].qty += tx.qty; // cancel sale = add stock
-            else inventory[tx.item].qty -= tx.qty; // cancel restock = min stock
-        }
-        
-        transactions.splice(txIndex, 1);
-        localStorage.setItem('umkm_transactions', JSON.stringify(transactions));
-        localStorage.setItem('umkm_inventory', JSON.stringify(inventory));
-        renderTransactions();
+    const workingInventory = cloneInventory(state.inventory);
+    const revertOld = applyTransactionEffect(workingInventory, oldTx, -1);
+    if (!revertOld.ok) {
+        alert(revertOld.reason);
+        return;
     }
+
+    const applyNew = applyTransactionEffect(workingInventory, nextTx, 1);
+    if (!applyNew.ok) {
+        alert(applyNew.reason);
+        return;
+    }
+
+    const updatedTransactions = [...state.transactions];
+    updatedTransactions[index] = nextTx;
+    persistInventory(workingInventory);
+    persistTransactions(updatedTransactions);
+    closeModal('transaction-modal');
+    renderApp();
 }
 
-// --- CORE: INVENTORY LOGIC (PAGE 3) ---
-function renderInventory() {
-    const tbody = document.getElementById('inv-table-body');
-    tbody.innerHTML = '';
-    
-    const search = document.getElementById('inv-search').value.toLowerCase();
-    const statusFilter = document.getElementById('inv-filter-status').value;
-    
-    let items = Object.keys(inventory);
+function deleteTransaction(txId) {
+    const tx = state.transactions.find((entry) => String(entry.id) === String(txId));
+    if (!tx) return;
 
-    // Apply Filters
-    if (search) items = items.filter(name => name.toLowerCase().includes(search));
-    
-    items.forEach(itemName => {
-        const details = inventory[itemName];
-        const isLow = details.qty <= details.minStock;
-        
-        if (statusFilter === 'low' && !isLow) return; // Skip if filter is low stock but item is fine
-        
-        const margin = ((details.price - details.cogs) / details.price) * 100;
-        let badgeHtml = `<span class="badge badge-success">Good</span>`;
-        if (details.qty <= 0) badgeHtml = `<span class="badge badge-danger">Out of Stock</span>`;
-        else if (isLow) badgeHtml = `<span class="badge badge-warning">Low (Min ${details.minStock})</span>`;
+    const confirmed = confirm(`Hapus transaksi ${tx.item} (${tx.qty} pcs) pada ${tx.transactionDate}?`);
+    if (!confirmed) return;
 
-        tbody.innerHTML += `
-            <tr>
-                <td><strong>${itemName}</strong></td>
-                <td>${details.qty}</td>
-                <td>${formatRupiah(details.cogs)}</td>
-                <td>${formatRupiah(details.price)}</td>
-                <td class="text-success">${margin.toFixed(1)}%</td>
-                <td>${badgeHtml}</td>
-                <td>
-                    <button class="btn btn-secondary" onclick="editInventoryItem('${itemName}')"><i class='bx bx-edit'></i> Edit</button>
-                    <button class="btn btn-danger" onclick="deleteInventoryItem('${itemName}')"><i class='bx bx-trash'></i></button>
-                </td>
-            </tr>
-        `;
-    });
-}
+    const workingInventory = cloneInventory(state.inventory);
+    const revert = applyTransactionEffect(workingInventory, tx, -1);
+    if (!revert.ok) {
+        alert(revert.reason);
+        return;
+    }
 
-// Modal Logic
-function openInventoryModal() {
-    document.getElementById('form-inventory').reset();
-    document.getElementById('inv-original-name').value = '';
-    document.getElementById('inv-modal-title').innerText = 'Add New Item';
-    document.getElementById('modal-inventory').classList.add('active');
-}
-
-function closeModal(id) {
-    document.getElementById(id).classList.remove('active');
-}
-
-function editInventoryItem(itemName) {
-    const details = inventory[itemName];
-    document.getElementById('inv-original-name').value = itemName;
-    document.getElementById('inv-name').value = itemName;
-    document.getElementById('inv-qty').value = details.qty;
-    document.getElementById('inv-min').value = details.minStock;
-    document.getElementById('inv-cogs').value = details.cogs;
-    document.getElementById('inv-price').value = details.price;
-    
-    document.getElementById('inv-modal-title').innerText = 'Edit Item';
-    document.getElementById('modal-inventory').classList.add('active');
+    persistInventory(workingInventory);
+    persistTransactions(state.transactions.filter((entry) => String(entry.id) !== String(txId)));
+    renderApp();
 }
 
 function saveInventoryItem(event) {
     event.preventDefault();
-    const originalName = document.getElementById('inv-original-name').value;
-    const newName = document.getElementById('inv-name').value.trim();
-    
-    const newData = {
-        qty: parseInt(document.getElementById('inv-qty').value),
-        minStock: parseInt(document.getElementById('inv-min').value),
-        cogs: parseInt(document.getElementById('inv-cogs').value),
-        price: parseInt(document.getElementById('inv-price').value)
-    };
 
-    if (originalName && originalName !== newName) {
-        // If renaming item
-        delete inventory[originalName];
+    const originalName = document.getElementById('inventory-original-name').value.trim();
+    const name = document.getElementById('inventory-name').value.trim();
+    const cogs = Number(document.getElementById('inventory-cogs').value);
+    const price = Number(document.getElementById('inventory-price').value);
+    const qty = Number(document.getElementById('inventory-qty').value);
+    const minStock = Number(document.getElementById('inventory-min-stock').value);
+
+    if (!name || !Number.isFinite(cogs) || !Number.isFinite(price) || !Number.isFinite(qty) || !Number.isFinite(minStock)) {
+        alert('Lengkapi data inventory dengan benar.');
+        return;
     }
-    
-    inventory[newName] = newData;
-    localStorage.setItem('umkm_inventory', JSON.stringify(inventory));
-    
-    closeModal('modal-inventory');
-    renderInventory();
-    populateItemDropdowns(); // Update dashboard dropdown
-}
 
-function deleteInventoryItem(itemName) {
-    if(confirm(`Are you sure you want to delete ${itemName} from inventory?`)) {
-        delete inventory[itemName];
-        localStorage.setItem('umkm_inventory', JSON.stringify(inventory));
-        renderInventory();
-    }
-}
+    const nextInventory = cloneInventory(state.inventory);
 
-// --- EXPORT LOGIC ---
-function exportTransactionsExcel() {
-    const ws = XLSX.utils.json_to_sheet(transactions.map(t => ({
-        Date: t.date, Time: t.time, Type: t.type.toUpperCase(), Item: t.item,
-        Quantity: t.qty, Amount: t.amount, Channel: t.channel
-    })));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Transactions");
-    XLSX.writeFile(wb, `Transactions_Export_${getTodayStr()}.xlsx`);
-}
-
-function exportInventoryExcel() {
-    const flatInventory = Object.keys(inventory).map(key => ({
-        Item_Name: key,
-        Current_Stock: inventory[key].qty,
-        Min_Stock_Limit: inventory[key].minStock,
-        COGS: inventory[key].cogs,
-        Selling_Price: inventory[key].price
-    }));
-    const ws = XLSX.utils.json_to_sheet(flatInventory);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Inventory");
-    XLSX.writeFile(wb, `Inventory_Export_${getTodayStr()}.xlsx`);
-}
-}
-
-// Helper: Update BEP Bar
-function updateBEPUI() {
-    let percentage = (currentRevenue / BEP_TARGET) * 100;
-    let barWidth = percentage > 100 ? 100 : percentage;
-
-    document.getElementById('bep-text').innerText = `${percentage.toFixed(1)}% Realized`;
-    const bepBar = document.getElementById('bep-bar');
-    bepBar.style.width = `${barWidth}%`;
-    bepBar.style.backgroundColor = percentage >= 100 ? 'var(--success)' : 'var(--brand)';
-    document.getElementById('bep-current-text').innerText = formatRupiah(currentRevenue);
-}
-
-// 3. CORE: Render the Application
-function renderApp() {
-    currentRevenue = 0;
-    salesCount = 0;
-    totalCapitalValuation = 0;
-    
-    // Render Ledger Feed
-    const feedContainer = document.getElementById('ledger-feed');
-    feedContainer.innerHTML = ''; 
-
-    if (transactions.length === 0) {
-        feedContainer.innerHTML = `<div class="empty-state">No transactions recorded yet. Add an entry to begin tracking.</div>`;
+    if (originalName && originalName !== name) {
+        if (nextInventory[name]) {
+            alert('Nama item baru sudah dipakai item lain.');
+            return;
+        }
+        nextInventory[name] = { ...nextInventory[originalName], cogs, price, qty, minStock, archived: nextInventory[originalName]?.archived || false };
+        delete nextInventory[originalName];
+        state.transactions = state.transactions.map((tx) => tx.item === originalName ? { ...tx, item: name } : tx);
+        persistTransactions(state.transactions);
     } else {
-        transactions.slice().reverse().forEach(t => {
-            if (t.type === 'income') {
-                currentRevenue += t.amount;
-                salesCount += 1;
-            }
+        nextInventory[name] = { cogs, price, qty, minStock, archived: nextInventory[name]?.archived || false };
+    }
 
-            const sign = t.type === 'income' ? '+' : '-';
-            const colorClass = t.type === 'income' ? 'amt-pos' : 'amt-neg';
-            const actionText = t.type === 'income' ? 'Sold' : 'Restocked';
-            const notesText = t.notes ? `• ${t.notes}` : '';
-            
-            const html = `
-                <div class="stream-item" data-id="${t.id}">
-                    <div class="stream-details">
-                        <strong>${actionText} ${t.qty}x ${t.item}</strong>
-                        <span style="font-size: 11px; color: var(--text-muted);">${notesText}</span>
-                        <span class="stream-time">${t.timestamp} • ${t.channel}</span>
-                    </div>
-                    <span class="${colorClass}">${sign}${formatRupiah(t.amount)}</span>
-                </div>
-            `;
-            feedContainer.insertAdjacentHTML('beforeend', html);
+    persistInventory(nextInventory);
+    resetInventoryForm();
+    renderApp();
+}
+
+function editInventoryItem(name) {
+    const item = state.inventory[name];
+    if (!item) return;
+
+    document.getElementById('inventory-original-name').value = name;
+    document.getElementById('inventory-name').value = name;
+    document.getElementById('inventory-cogs').value = item.cogs;
+    document.getElementById('inventory-price').value = item.price;
+    document.getElementById('inventory-qty').value = item.qty;
+    document.getElementById('inventory-min-stock').value = item.minStock;
+    document.getElementById('inventory-form-title').textContent = `Edit item: ${name}`;
+    document.getElementById('inventory-save-btn').textContent = 'Update Item';
+}
+
+function deleteInventoryItem(name) {
+    const confirmed = confirm(`Arsipkan item ${name} dari inventory aktif?`);
+    if (!confirmed) return;
+
+    const nextInventory = cloneInventory(state.inventory);
+    if (!nextInventory[name]) return;
+    nextInventory[name].archived = true;
+    persistInventory(nextInventory);
+    resetInventoryForm();
+    renderApp();
+}
+
+function restoreInventoryItem(name) {
+    const nextInventory = cloneInventory(state.inventory);
+    if (!nextInventory[name]) return;
+    nextInventory[name].archived = false;
+    persistInventory(nextInventory);
+    renderApp();
+}
+
+function resetInventoryForm() {
+    document.getElementById('inventory-form').reset();
+    document.getElementById('inventory-original-name').value = '';
+    document.getElementById('inventory-form-title').textContent = 'Add item';
+    document.getElementById('inventory-save-btn').textContent = 'Save Item';
+}
+
+function exportTransactions() {
+    const rows = getFilteredTransactions();
+    const wb = XLSX.utils.book_new();
+    const sheetRows = [
+        ['Date', 'Created At', 'Type', 'Item', 'Qty', 'Amount', 'Channel', 'Notes']
+    ].concat(rows.map((tx) => [
+        tx.transactionDate,
+        toJakartaDateTime(tx.createdAt),
+        tx.type,
+        tx.item,
+        tx.qty,
+        tx.amount,
+        tx.channel,
+        tx.notes || ''
+    ]));
+    const ws = XLSX.utils.aoa_to_sheet(sheetRows);
+    XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
+
+    const filteredIncome = rows.filter((tx) => tx.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
+    const filteredExpense = rows.filter((tx) => tx.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
+    const summarySheet = XLSX.utils.aoa_to_sheet([
+        ['Filtered Transaction Export'],
+        ['Records', rows.length],
+        ['Income', filteredIncome],
+        ['Expense', filteredExpense],
+        ['Net', filteredIncome - filteredExpense]
+    ]);
+    XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+
+    const filename = `UMKM_Transactions_${todayKey()}.xlsx`;
+    XLSX.writeFile(wb, filename);
+}
+
+function exportInventory() {
+    const wb = XLSX.utils.book_new();
+    const rows = Object.entries(state.inventory)
+        .map(([name, item]) => {
+            const margin = item.price > 0 ? ((item.price - item.cogs) / item.price) * 100 : 0;
+            const asset = item.cogs * item.qty;
+            return {
+                Item: name,
+                COGS: item.cogs,
+                Price: item.price,
+                Qty: item.qty,
+                MinStock: item.minStock,
+                MarginPercent: Number(margin.toFixed(1)),
+                AssetValue: asset,
+                Status: item.qty <= 0 ? 'Out of stock' : item.qty <= item.minStock ? 'Low stock' : 'Healthy'
+            };
+        })
+        .sort((a, b) => a.Item.localeCompare(b.Item, 'id'));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
+
+    const raw = XLSX.utils.aoa_to_sheet([
+        ['Item', 'COGS', 'Price', 'Qty', 'Min Stock']
+    ].concat(rows.map((row) => [row.Item, row.COGS, row.Price, row.Qty, row.MinStock])));
+    XLSX.utils.book_append_sheet(wb, raw, 'Raw Storage');
+
+    XLSX.writeFile(wb, `UMKM_Inventory_${todayKey()}.xlsx`);
+}
+
+function openModal(id) {
+    document.getElementById(id).classList.remove('hidden');
+}
+
+function closeModal(id) {
+    document.getElementById(id).classList.add('hidden');
+}
+
+function wireEvents() {
+    document.querySelectorAll('.nav-pill').forEach((button) => {
+        button.addEventListener('click', () => {
+            state.activePage = button.dataset.page;
+            updatePageVisibility(state.activePage);
+        });
+    });
+
+    document.getElementById('ledger-form').addEventListener('submit', addTransaction);
+    document.getElementById('transaction-edit-form').addEventListener('submit', saveEditedTransaction);
+    document.getElementById('inventory-form').addEventListener('submit', saveInventoryItem);
+    document.getElementById('inventory-cancel-btn').addEventListener('click', resetInventoryForm);
+
+    document.getElementById('tx-search').addEventListener('input', (event) => {
+        state.transactionFilters.search = event.target.value;
+        renderTransactions();
+    });
+    document.getElementById('tx-start-date').addEventListener('change', (event) => {
+        state.transactionFilters.startDate = event.target.value;
+        renderTransactions();
+    });
+    document.getElementById('tx-end-date').addEventListener('change', (event) => {
+        state.transactionFilters.endDate = event.target.value;
+        renderTransactions();
+    });
+    document.getElementById('tx-type').addEventListener('change', (event) => {
+        state.transactionFilters.type = event.target.value;
+        renderTransactions();
+    });
+    document.getElementById('tx-item').addEventListener('change', (event) => {
+        state.transactionFilters.item = event.target.value;
+        renderTransactions();
+    });
+    document.getElementById('tx-channel').addEventListener('change', (event) => {
+        state.transactionFilters.channel = event.target.value;
+        renderTransactions();
+    });
+
+    document.getElementById('reset-transaction-filters').addEventListener('click', () => {
+        state.transactionFilters = {
+            search: '',
+            startDate: '',
+            endDate: '',
+            type: 'all',
+            item: 'all',
+            channel: 'all'
+        };
+        document.getElementById('tx-search').value = '';
+        document.getElementById('tx-start-date').value = '';
+        document.getElementById('tx-end-date').value = '';
+        document.getElementById('tx-type').value = 'all';
+        document.getElementById('tx-item').value = 'all';
+        document.getElementById('tx-channel').value = 'all';
+        renderTransactions();
+    });
+
+    document.getElementById('export-transactions-btn').addEventListener('click', exportTransactions);
+    document.getElementById('export-inventory-btn').addEventListener('click', exportInventory);
+
+    document.getElementById('inventory-search').addEventListener('input', (event) => {
+        state.inventoryFilters.search = event.target.value;
+        renderInventory();
+    });
+    document.getElementById('inventory-status-filter').addEventListener('change', (event) => {
+        state.inventoryFilters.status = event.target.value;
+        renderInventory();
+    });
+
+    document.getElementById('transactions-table-body').addEventListener('click', (event) => {
+        const editId = event.target.closest('[data-edit-transaction]')?.dataset.editTransaction;
+        const deleteId = event.target.closest('[data-delete-transaction]')?.dataset.deleteTransaction;
+        if (editId) openTransactionModal(editId);
+        if (deleteId) deleteTransaction(deleteId);
+    });
+
+    document.getElementById('inventory-table-body').addEventListener('click', (event) => {
+        const editName = event.target.closest('[data-edit-item]')?.dataset.editItem;
+        const deleteName = event.target.closest('[data-delete-item]')?.dataset.deleteItem;
+        const restoreName = event.target.closest('[data-restore-item]')?.dataset.restoreItem;
+        if (editName) editInventoryItem(editName);
+        if (deleteName) deleteInventoryItem(deleteName);
+        if (restoreName) restoreInventoryItem(restoreName);
+    });
+
+    document.querySelectorAll('[data-close-modal]').forEach((button) => {
+        button.addEventListener('click', () => closeModal(button.dataset.closeModal));
+    });
+
+    document.getElementById('transaction-modal').addEventListener('click', (event) => {
+        if (event.target.id === 'transaction-modal') closeModal('transaction-modal');
+    });
+
+    document.getElementById('entry-type').addEventListener('change', updateEntryItemAvailability);
+}
+
+function updateEntryItemAvailability() {
+    const type = document.getElementById('entry-type').value;
+    const helper = document.getElementById('entry-item');
+    if (!helper.options.length) return;
+
+    if (type === 'expense') {
+        helper.title = 'Pilih item untuk restock';
+    } else {
+        helper.title = 'Pilih item untuk penjualan';
+    }
+}
+
+function init() {
+    state.transactions = loadTransactions();
+    state.inventory = loadInventory();
+    wireEvents();
+    renderApp();
+    updateEntryItemAvailability();
+
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js').catch((error) => {
+                console.warn('Service worker registration failed', error);
+            });
         });
     }
 
-    // Render Inventory Table
-    const invBody = document.getElementById('inventory-table-body');
-    invBody.innerHTML = '';
-    
-    for (const [itemName, details] of Object.entries(inventory)) {
-        const margin = ((details.price - details.cogs) / details.price) * 100;
-        const assetValue = details.cogs * details.qty;
-        totalCapitalValuation += assetValue; 
-
-        let badgeHtml = `<span class="badge badge-success">Optimized</span>`;
-        if (details.qty <= 0) {
-            badgeHtml = `<span class="badge badge-danger">Out of Stock</span>`;
-        } else if (details.qty <= details.minStock) {
-            badgeHtml = `<span class="badge badge-warning">Low Stock (Min: ${details.minStock})</span>`;
-        }
-
-        const rowHtml = `
-            <tr>
-                <td><strong>${itemName}</strong></td>
-                <td>${details.qty} units</td>
-                <td>${formatRupiah(details.cogs)}</td>
-                <td>${formatRupiah(details.price)}</td>
-                <td><span style="color: var(--success);">${margin.toFixed(1)}%</span></td>
-                <td>${formatRupiah(assetValue)}</td>
-                <td>${badgeHtml}</td>
-            </tr>
-        `;
-        invBody.insertAdjacentHTML('beforeend', rowHtml);
-    }
-
-    // Update Top Dashboard Metrics
-    document.getElementById('daily-revenue-metric').innerText = formatRupiah(currentRevenue);
-    document.getElementById('daily-sales-count').innerText = `✓ ${salesCount} Checked-out sales`;
-    document.getElementById('capital-valuation-metric').innerText = formatRupiah(totalCapitalValuation);
-    updateBEPUI();
+    document.getElementById('sync-badge').textContent = 'Ready';
 }
 
-// 4. CORE: Add Transaction & Update Inventory
-function addLedgerEntry(event) {
-    event.preventDefault(); 
-
-    const type = document.getElementById('entry-type').value;
-    const item = document.getElementById('entry-item').value;
-    const qty = parseInt(document.getElementById('entry-qty').value, 10);
-    const amount = parseInt(document.getElementById('entry-amount').value, 10);
-    const channel = document.getElementById('entry-channel').value;
-    const notes = document.getElementById('entry-notes').value;
-    const now = new Date();
-
-    // Guardrail: Prevent selling more stock than available
-    if (type === 'income' && inventory[item].qty < qty) {
-        alert(`Transaction Failed: You cannot sell ${qty} ${item}. You only have ${inventory[item].qty} units in stock.`);
-        return; 
-    }
-
-    // Update Inventory State
-    if (type === 'income') {
-        inventory[item].qty -= qty;
-    } else if (type === 'expense') {
-        inventory[item].qty += qty;
-    }
-
-    // Save updated inventory to LocalStorage
-    localStorage.setItem('umkm_inventory', JSON.stringify(inventory));
-
-    // Record Transaction
-    const newTransaction = {
-        id: Date.now(),
-        type: type,
-        item: item,
-        qty: qty,
-        amount: amount,
-        channel: channel,
-        notes: notes,
-        timestamp: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-
-    transactions.push(newTransaction);
-    localStorage.setItem('umkm_transactions', JSON.stringify(transactions));
-
-    // Redraw the UI
-    renderApp();
-
-    // Reset Form
-    document.getElementById('ledger-form').reset();
-    document.getElementById('entry-type').focus(); 
-}
-
-// 5. EXPORT FUNCTIONALITY
-function exportFinancialReport(templateOnly = false) {
-    const selectedMonth = document.getElementById('report-window').value;
-    let filename = `TokoKita_Template_${selectedMonth}.xlsx`;
-    const wb = XLSX.utils.book_new();
-    
-    if (templateOnly) {
-        const templateHeaders = [["Product Specification", "Stock Level", "Capital Cost (COGS)", "Retail Base Price"]];
-        const ws = XLSX.utils.aoa_to_sheet(templateHeaders);
-        XLSX.utils.book_append_sheet(wb, ws, "Blank Inventory Input");
-    } else {
-        filename = `TokoKita_Financial_Report_${selectedMonth}.xlsx`;
-        let bepPercentage = ((currentRevenue / BEP_TARGET) * 100).toFixed(1) + "%";
-
-        const summaryData = [
-            ["TokoKita Business Performance Summary", "", ""],
-            ["Reporting Window", selectedMonth.replace('_', ' '), ""],
-            [],
-            ["Metric Parameter", "Value", "Operational Status Context"],
-            ["Daily Cash Revenue", formatRupiah(currentRevenue), `${salesCount} Checked-out transactions`],
-            ["Active Capital Valuation", formatRupiah(totalCapitalValuation), "Assets tied in operational storage"],
-            ["Monthly BEP Realization", bepPercentage, "Target: Rp 5.000.000"]
-        ];
-        const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
-        XLSX.utils.book_append_sheet(wb, wsSummary, "Dashboard Overview");
-
-        const tableElement = document.getElementById('inventory-table');
-        const wsInventory = XLSX.utils.table_to_sheet(tableElement);
-        XLSX.utils.book_append_sheet(wb, wsInventory, "Active Stock Inventory");
-    }
-    XLSX.writeFile(wb, filename);
-}
+window.addEventListener('DOMContentLoaded', init);
